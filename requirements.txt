@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+flatlib
+pyswisseph
+pydantic
+python-dateutil
+tzdata
