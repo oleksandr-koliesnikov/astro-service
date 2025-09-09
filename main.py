@@ -59,7 +59,7 @@ def chart_endpoint(req: ChartRequest):
     dt = to_dt(req.date, req.time, req.timezone)
 
     # В flatlib широта/долгота передаются строками
-    pos = GeoPos(str(req.lat), str(req.lng))
+   pos = GeoPos(f"{req.lat:.6f}", f"{req.lng:.6f}")
 
     # Строим натальную карту (по умолчанию houses=Placidus в flatlib)
     nc = chart.Chart(dt, pos, IDs=PLANETS)
