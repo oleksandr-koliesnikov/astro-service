@@ -55,3 +55,9 @@ def root():
 @app.get("/health")
 def health():
     return {"ok": True}
+import swisseph as swe
+import os
+
+# Указываем путь до эфемерид
+EPHE_PATH = os.path.join(os.path.dirname(__file__), "ephe")
+swe.set_ephe_path(EPHE_PATH)
