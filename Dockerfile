@@ -21,8 +21,3 @@ EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 # Копируем папку ephe внутрь контейнера
 COPY ephe /app/ephe
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.DS_Store
