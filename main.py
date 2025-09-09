@@ -47,3 +47,11 @@ def chart_endpoint(req:ChartRequest):
         positions[LABEL[pid]]={"lon":obj.lon,"sign":sign}
 
     return {"positions":positions}
+@app.get("/")
+def root():
+    # простой ответ для healthcheck
+    return {"status": "ok"}
+
+@app.get("/health")
+def health():
+    return {"ok": True}
