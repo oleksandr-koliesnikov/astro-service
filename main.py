@@ -72,11 +72,12 @@ def chart_endpoint(req: ChartRequest):
     for pid in PLANETS:
         obj = nc.get(pid)
         positions[LABEL[pid]] = {
-            "lon": round(obj.lon, 6),
-            "lat": round(obj.lat, 6),
-            "speed": round(obj.speed, 6),
-            "sign": sign_from_lon(obj.lon)
-        }
+    "lon": obj.lon,
+    "sign": sign_from_lon(obj.lon),
+    "lat": obj.lat,
+    "speed": obj.data.get("speed", 0),
+}
+    
 
     # --- Углы (ASC, MC) ---
     angles = {
