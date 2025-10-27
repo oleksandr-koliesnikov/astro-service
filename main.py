@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from dateutil import parser, tz
-from flatlib import const, chart
+from flatlib import const, chart, aspects
 from flatlib.geopos import GeoPos
 from flatlib.datetime import Datetime
 import os
@@ -21,7 +21,6 @@ LABEL = {
 SIGNS = ["Aries","Taurus","Gemini","Cancer","Leo","Virgo","Libra",
          "Scorpio","Sagittarius","Capricorn","Aquarius","Pisces"]
 
-# --- Swiss Ephemeris path ---
 EPHE_PATH = os.path.join(os.path.dirname(__file__), "ephe")
 swe.set_ephe_path(EPHE_PATH)
 
@@ -30,8 +29,8 @@ class ChartRequest(BaseModel):
     date: str = Field(..., description="YYYY-MM-DD")
     time: str = Field(..., description="HH:MM")
     timezone: str = Field(..., description="e.g. America/Toronto")
-    lat: float  # decimal degrees (north positive)
-    lng: float  # decimal degrees (east positive)
+    lat: float
+    lng: float
 
 def to_dt(date_str: str, time_str: str, timezone: str) -> Datetime:
     dt = parser.parse(f"{date_str} {time_str}")
@@ -42,18 +41,12 @@ def to_dt(date_str: str, time_str: str, timezone: str) -> Datetime:
     return Datetime(dt.strftime("%Y/%m/%d"), dt.strftime("%H:%M"), "+00:00")
 
 def deg_to_dm_cardinal(value: float, is_lat: bool) -> str:
-    """
-    Convert decimal degrees to flatlib GeoPos string.
-    lat:  DDnMM / DDsMM
-    lon: DDD eMM / DDD wMM
-    """
     hemi_pos = 'n' if is_lat else 'e'
     hemi_neg = 's' if is_lat else 'w'
     hemi = hemi_pos if value >= 0 else hemi_neg
     v = abs(value)
     d = int(v)
     m = int(round((v - d) * 60))
-    # нормализуем минуты 60 -> +1 градус
     if m == 60:
         d += 1
         m = 0
@@ -63,28 +56,58 @@ def deg_to_dm_cardinal(value: float, is_lat: bool) -> str:
         return f"{d:03d}{hemi}{m:02d}"
 
 def sign_from_lon(lon: float) -> str:
-    """Знак зодиака по долготе (0–360)."""
     return SIGNS[int((lon % 360) // 30)]
 
 @app.post("/chart")
 def chart_endpoint(req: ChartRequest):
     dt = to_dt(req.date, req.time, req.timezone)
-
-    # ключевая правка: переводим десятичные градусы в формат GeoPos
     lat_str = deg_to_dm_cardinal(req.lat, is_lat=True)
     lon_str = deg_to_dm_cardinal(req.lng, is_lat=False)
     pos = GeoPos(lat_str, lon_str)
 
     nc = chart.Chart(dt, pos, IDs=PLANETS)
 
+    # --- Позиции планет ---
     positions = {}
     for pid in PLANETS:
         obj = nc.get(pid)
         positions[LABEL[pid]] = {
-            "lon": obj.lon,
+            "lon": round(obj.lon, 6),
+            "lat": round(obj.lat, 6),
+            "speed": round(obj.speed, 6),
             "sign": sign_from_lon(obj.lon)
         }
-    return {"positions": positions}
+
+    # --- Углы (ASC, MC) ---
+    angles = {
+        "ASC": {"lon": round(nc.get(const.ASC).lon, 6), "sign": sign_from_lon(nc.get(const.ASC).lon)},
+        "MC": {"lon": round(nc.get(const.MC).lon, 6), "sign": sign_from_lon(nc.get(const.MC).lon)}
+    }
+
+    # --- Дома ---
+    houses = [round(hc.lon, 6) for hc in nc.houses.cusps]
+
+    # --- Аспекты ---
+    asps = []
+    objs = [nc.get(pid) for pid in PLANETS]
+    for i in range(len(objs)):
+        for j in range(i + 1, len(objs)):
+            asp = aspects.getAspect(objs[i], objs[j])
+            if asp:
+                asps.append({
+                    "a": LABEL[objs[i].id],
+                    "b": LABEL[objs[j].id],
+                    "type": asp.type,
+                    "orb": round(asp.orb, 2),
+                    "applying": asp.applying
+                })
+
+    return {
+        "positions": positions,
+        "angles": angles,
+        "houses": houses,
+        "aspects": asps
+    }
 
 @app.get("/")
 def root():
