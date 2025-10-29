@@ -75,7 +75,6 @@ def chart_endpoint(req: ChartRequest):
     "lon": obj.lon,
     "sign": sign_from_lon(obj.lon),
     "lat": obj.lat,
-    "speed": obj.data.get("speed", 0),
 }
     
 
