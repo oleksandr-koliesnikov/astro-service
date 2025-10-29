@@ -18,8 +18,10 @@ LABEL = {
     const.MARS: "Mars", const.JUPITER: "Jupiter", const.SATURN: "Saturn",
     const.URANUS: "Uranus", const.NEPTUNE: "Neptune", const.PLUTO: "Pluto"
 }
-SIGNS = ["Aries","Taurus","Gemini","Cancer","Leo","Virgo","Libra",
-         "Scorpio","Sagittarius","Capricorn","Aquarius","Pisces"]
+SIGNS = [
+    "Aries","Taurus","Gemini","Cancer","Leo","Virgo","Libra",
+    "Scorpio","Sagittarius","Capricorn","Aquarius","Pisces"
+]
 
 EPHE_PATH = os.path.join(os.path.dirname(__file__), "ephe")
 swe.set_ephe_path(EPHE_PATH)
@@ -78,7 +80,7 @@ def chart_endpoint(req: ChartRequest):
     # Углы
     angles = {
         "ASC": {"lon": round(nc.get(const.ASC).lon, 6), "sign": sign_from_lon(nc.get(const.ASC).lon)},
-        "MC":  {"lon": round(nc.get(const.MC).lon,  6), "sign": sign_from_lon(nc.get(const.MC).lon)}
+        "MC":  {"lon": round(nc.get(const.MC).lon,  6), "sign": sign_from_lon(nc.get(const.MC).lon)},
     }
 
     # Дома (совместимо с flatlib 0.2.3)
@@ -86,7 +88,6 @@ def chart_endpoint(req: ChartRequest):
     try:
         # В 0.2.3 у Chart.houses есть .houses (список объектов House)
         for h in getattr(nc.houses, "houses", []):
-            # У House в 0.2.3 долгота хранится в .lon
             lon = getattr(h, "lon", None)
             if lon is not None:
                 houses.append(round(lon, 6))
@@ -95,20 +96,18 @@ def chart_endpoint(req: ChartRequest):
     except Exception:
         houses = []
 
-    # Аспекты (без явного списка — major по умолчанию)
-    asps = []
+    # Аспекты (major по умолчанию)
     objs = [nc.get(pid) for pid in PLANETS]
-    for i in range(len(objs)):
-        for j in range(i + 1, len(objs)):
-           asps = aspects.getAspects(objs, aspects.MAJOR_ASPECTS)
-            if asp:
-                asps.append({
-                    "a": LABEL[objs[i].id],
-                    "b": LABEL[objs[j].id],
-                    "type": asp.type,
-                    "orb": round(asp.orb, 2),
-                    "applying": asp.applying
-                })
+    found = aspects.getAspects(objs, aspects.MAJOR_ASPECTS)  # разом для всех пар
+    asps = []
+    for asp in found:
+        asps.append({
+            "a": LABEL[getattr(asp, "obj1").id],
+            "b": LABEL[getattr(asp, "obj2").id],
+            "type": asp.type,
+            "orb": round(getattr(asp, "orb", 0.0), 2),
+            "applying": getattr(asp, "applying", getattr(asp, "isApplying", False)),
+        })
 
     return {"positions": positions, "angles": angles, "houses": houses, "aspects": asps}
 
