@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from dateutil import parser, tz
-from flatlib import const, chart, aspects
+from flatlib import const, chart
 from flatlib.geopos import GeoPos
 from flatlib.datetime import Datetime
 import os
@@ -11,12 +11,12 @@ app = FastAPI(title="HoroscopeHub Astro Service")
 
 PLANETS = [
     const.SUN, const.MOON, const.MERCURY, const.VENUS, const.MARS,
-    const.JUPITER, const.SATURN, const.URANUS, const.NEPTUNE, const.PLUTO
+    const.JUPITER, const.SATURN, const.URANUS, const.NEPTUNE, const.PLUTO,
 ]
 LABEL = {
     const.SUN: "Sun", const.MOON: "Moon", const.MERCURY: "Mercury", const.VENUS: "Venus",
     const.MARS: "Mars", const.JUPITER: "Jupiter", const.SATURN: "Saturn",
-    const.URANUS: "Uranus", const.NEPTUNE: "Neptune", const.PLUTO: "Pluto"
+    const.URANUS: "Uranus", const.NEPTUNE: "Neptune", const.PLUTO: "Pluto",
 }
 SIGNS = [
     "Aries","Taurus","Gemini","Cancer","Leo","Virgo","Libra",
@@ -57,6 +57,19 @@ def deg_to_dm_cardinal(value: float, is_lat: bool) -> str:
 def sign_from_lon(lon: float) -> str:
     return SIGNS[int((lon % 360) // 30)]
 
+# ---- Aspect helpers (manual for flatlib 0.2.3) ----
+MAJOR_ASPECTS = [
+    ("conjunction", 0,   8.0),
+    ("sextile",     60,  4.0),
+    ("square",      90,  6.0),
+    ("trine",       120, 6.0),
+    ("opposition",  180, 8.0),
+]
+
+def ang_diff(a, b):
+    # минимальная разница углов 0..180
+    return abs((a - b + 180) % 360 - 180)
+
 @app.post("/chart")
 def chart_endpoint(req: ChartRequest):
     dt = to_dt(req.date, req.time, req.timezone)
@@ -79,10 +92,10 @@ def chart_endpoint(req: ChartRequest):
     # Углы
     angles = {
         "ASC": {"lon": round(nc.get(const.ASC).lon, 6), "sign": sign_from_lon(nc.get(const.ASC).lon)},
-        "MC":  {"lon": round(nc.get(const.MC).lon, 6), "sign": sign_from_lon(nc.get(const.MC).lon)},
+        "MC":  {"lon": round(nc.get(const.MC).lon,  6), "sign": sign_from_lon(nc.get(const.MC).lon)},
     }
 
-    # Дома
+    # Дома (совместимо с 0.2.3)
     houses = []
     try:
         for h in getattr(nc.houses, "houses", []):
@@ -94,19 +107,26 @@ def chart_endpoint(req: ChartRequest):
     except Exception:
         houses = []
 
-    # Аспекты (совместимо с flatlib 0.2.3)
+    # Аспекты (мажорные)
     asps = []
     objs = [nc.get(pid) for pid in PLANETS]
     for i in range(len(objs)):
         for j in range(i + 1, len(objs)):
-            asp = aspects.getAspect(objs[i], objs[j], aspects.MAJOR_ASPECTS)
-            if asp:
+            d = ang_diff(objs[i].lon, objs[j].lon)
+            hit = None
+            for name, target, orb in MAJOR_ASPECTS:
+                delta = abs(d - target)
+                if delta <= orb:
+                    hit = (name, delta)
+                    break
+            if hit:
+                name, delta = hit
                 asps.append({
                     "a": LABEL[objs[i].id],
                     "b": LABEL[objs[j].id],
-                    "type": asp.type,
-                    "orb": round(asp.orb, 2),
-                    "applying": asp.applying,
+                    "type": name,
+                    "orb": round(delta, 2),
+                    "applying": None,  # без скоростей не считаем
                 })
 
     return {"positions": positions, "angles": angles, "houses": houses, "aspects": asps}
