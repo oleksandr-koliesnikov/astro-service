@@ -35,7 +35,6 @@ class ChartRequest(BaseModel):
     lng: float
 
 def to_dt(date_str: str, time_str: str, timezone: str) -> Datetime:
-    # принимает "Europe/Kyiv" ИЛИ "UTC-04:00"
     dt_local = parser.parse(f"{date_str} {time_str}")
     tzinfo = tz.gettz(timezone)
     if tzinfo is None:
@@ -80,13 +79,12 @@ def chart_endpoint(req: ChartRequest):
     # Углы
     angles = {
         "ASC": {"lon": round(nc.get(const.ASC).lon, 6), "sign": sign_from_lon(nc.get(const.ASC).lon)},
-        "MC":  {"lon": round(nc.get(const.MC).lon,  6), "sign": sign_from_lon(nc.get(const.MC).lon)},
+        "MC":  {"lon": round(nc.get(const.MC).lon, 6), "sign": sign_from_lon(nc.get(const.MC).lon)},
     }
 
-    # Дома (совместимо с flatlib 0.2.3)
+    # Дома
     houses = []
     try:
-        # В 0.2.3 у Chart.houses есть .houses (список объектов House)
         for h in getattr(nc.houses, "houses", []):
             lon = getattr(h, "lon", None)
             if lon is not None:
@@ -96,18 +94,20 @@ def chart_endpoint(req: ChartRequest):
     except Exception:
         houses = []
 
-    # Аспекты (major по умолчанию)
-    objs = [nc.get(pid) for pid in PLANETS]
-    found = aspects.getAspects(objs, aspects.MAJOR_ASPECTS)  # разом для всех пар
+    # Аспекты (совместимо с flatlib 0.2.3)
     asps = []
-    for asp in found:
-        asps.append({
-            "a": LABEL[getattr(asp, "obj1").id],
-            "b": LABEL[getattr(asp, "obj2").id],
-            "type": asp.type,
-            "orb": round(getattr(asp, "orb", 0.0), 2),
-            "applying": getattr(asp, "applying", getattr(asp, "isApplying", False)),
-        })
+    objs = [nc.get(pid) for pid in PLANETS]
+    for i in range(len(objs)):
+        for j in range(i + 1, len(objs)):
+            asp = aspects.getAspect(objs[i], objs[j], aspects.MAJOR_ASPECTS)
+            if asp:
+                asps.append({
+                    "a": LABEL[objs[i].id],
+                    "b": LABEL[objs[j].id],
+                    "type": asp.type,
+                    "orb": round(asp.orb, 2),
+                    "applying": asp.applying,
+                })
 
     return {"positions": positions, "angles": angles, "houses": houses, "aspects": asps}
 
