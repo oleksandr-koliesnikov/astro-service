@@ -97,7 +97,7 @@ def houses_by_swe(date_str: str, time_str: str, timezone: str, lat: float, lng: 
     asc = float(ascmc[0]); mc = float(ascmc[1])
 
     # нормализуем 12 куспов в список 0..11
-    houses = [round(float(cusps[i+1]) % 360, 6) for i in range(12)]
+    houses = [round(float(x) % 360, 6) for x in cusps[:12]]
     angles = {
         "ASC": {"lon": round(asc % 360, 6), "sign": sign_from_lon(asc)},
         "MC":  {"lon": round(mc % 360,  6), "sign": sign_from_lon(mc)},
