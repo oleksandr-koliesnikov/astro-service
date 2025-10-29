@@ -81,7 +81,7 @@ def chart_endpoint(req: ChartRequest):
     }
 
     # Дома
-    houses = [round(hc.lon, 6) for hc in nc.houses.cusps]
+    houses = [round(hc.lon, 6) for hc in nc.houses]
 
     # Аспекты
     asps = []
