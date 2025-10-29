@@ -28,17 +28,18 @@ class ChartRequest(BaseModel):
     name: str = "Client"
     date: str = Field(..., description="YYYY-MM-DD")
     time: str = Field(..., description="HH:MM")
-    timezone: str = Field(..., description="e.g. Europe/Kyiv")
+    timezone: str = Field(..., description="IANA zone (e.g. Europe/Kyiv) or 'UTC±HH:MM'")
     lat: float
     lng: float
 
 def to_dt(date_str: str, time_str: str, timezone: str) -> Datetime:
-    dt = parser.parse(f"{date_str} {time_str}")
+    # принимает "Europe/Kyiv" ИЛИ "UTC-04:00"
+    dt_local = parser.parse(f"{date_str} {time_str}")
     tzinfo = tz.gettz(timezone)
     if tzinfo is None:
-        raise HTTPException(400, "Invalid timezone")
-    dt = dt.replace(tzinfo=tzinfo).astimezone(tz.UTC)
-    return Datetime(dt.strftime("%Y/%m/%d"), dt.strftime("%H:%M"), "+00:00")
+        raise HTTPException(status_code=400, detail="Invalid timezone")
+    dt_utc = dt_local.replace(tzinfo=tzinfo).astimezone(tz.UTC)
+    return Datetime(dt_utc.strftime("%Y/%m/%d"), dt_utc.strftime("%H:%M"), "+00:00")
 
 def deg_to_dm_cardinal(value: float, is_lat: bool) -> str:
     hemi_pos = 'n' if is_lat else 'e'
@@ -50,10 +51,7 @@ def deg_to_dm_cardinal(value: float, is_lat: bool) -> str:
     if m == 60:
         d += 1
         m = 0
-    if is_lat:
-        return f"{d:02d}{hemi}{m:02d}"
-    else:
-        return f"{d:03d}{hemi}{m:02d}"
+    return (f"{d:02d}{hemi}{m:02d}" if is_lat else f"{d:03d}{hemi}{m:02d}")
 
 def sign_from_lon(lon: float) -> str:
     return SIGNS[int((lon % 360) // 30)]
@@ -67,60 +65,52 @@ def chart_endpoint(req: ChartRequest):
 
     nc = chart.Chart(dt, pos, IDs=PLANETS)
 
-    # --- Позиции планет ---
+    # Позиции планет
     positions = {}
     for pid in PLANETS:
         obj = nc.get(pid)
         positions[LABEL[pid]] = {
             "lon": obj.lon,
             "sign": sign_from_lon(obj.lon),
-            "lat": obj.lat
+            "lat": obj.lat,
         }
 
-    # --- Углы ---
-    asc_lon = nc.get(const.ASC).lon
-    mc_lon  = nc.get(const.MC).lon
+    # Углы
     angles = {
-        "ASC": {"lon": round(asc_lon, 6), "sign": sign_from_lon(asc_lon)},
-        "MC":  {"lon": round(mc_lon,  6), "sign": sign_from_lon(mc_lon)}
+        "ASC": {"lon": round(nc.get(const.ASC).lon, 6), "sign": sign_from_lon(nc.get(const.ASC).lon)},
+        "MC":  {"lon": round(nc.get(const.MC).lon,  6), "sign": sign_from_lon(nc.get(const.MC).lon)}
     }
 
-    # --- Дома (совместимо с flatlib 0.2.3) ---
+    # Дома (совместимо с flatlib 0.2.3)
+    houses = []
     try:
-        houses = [round(h.cusp.lon, 6) for h in nc.houses]   # новый интерфейс
+        # В 0.2.3 у Chart.houses есть .houses (список объектов House)
+        for h in getattr(nc.houses, "houses", []):
+            # У House в 0.2.3 долгота хранится в .lon
+            lon = getattr(h, "lon", None)
+            if lon is not None:
+                houses.append(round(lon, 6))
+            elif hasattr(h, "cusp") and hasattr(h.cusp, "lon"):
+                houses.append(round(h.cusp.lon, 6))
     except Exception:
-        try:
-            houses = [round(h.lon, 6) for h in nc.houses.cusps]  # старый интерфейс
-        except Exception:
-            houses = []
+        houses = []
 
-  # --- Аспекты ---
-asps = []
-objs = [nc.get(pid) for pid in PLANETS]
-for i in range(len(objs)):
-    for j in range(i + 1, len(objs)):
-        asp = aspects.getAspect(objs[i], objs[j], [
-            aspects.CONJUNCTION,
-            aspects.SEXTILE,
-            aspects.SQUARE,
-            aspects.TRINE,
-            aspects.OPPOSITION
-        ])
-        if asp:
-            asps.append({
-                "a": LABEL[objs[i].id],
-                "b": LABEL[objs[j].id],
-                "type": asp.type,
-                "orb": round(asp.orb, 2),
-                "applying": asp.applying
-            })
+    # Аспекты (без явного списка — major по умолчанию)
+    asps = []
+    objs = [nc.get(pid) for pid in PLANETS]
+    for i in range(len(objs)):
+        for j in range(i + 1, len(objs)):
+            asp = aspects.getAspect(objs[i], objs[j])
+            if asp:
+                asps.append({
+                    "a": LABEL[objs[i].id],
+                    "b": LABEL[objs[j].id],
+                    "type": asp.type,
+                    "orb": round(asp.orb, 2),
+                    "applying": asp.applying
+                })
 
-    return {
-        "positions": positions,
-        "angles": angles,
-        "houses": houses,
-        "aspects": asps
-    }
+    return {"positions": positions, "angles": angles, "houses": houses, "aspects": asps}
 
 @app.get("/")
 def root():
