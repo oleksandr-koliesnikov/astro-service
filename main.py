@@ -100,7 +100,7 @@ def chart_endpoint(req: ChartRequest):
     objs = [nc.get(pid) for pid in PLANETS]
     for i in range(len(objs)):
         for j in range(i + 1, len(objs)):
-            asp = aspects.getAspect(objs[i], objs[j])
+           asps = aspects.getAspects(objs, aspects.MAJOR_ASPECTS)
             if asp:
                 asps.append({
                     "a": LABEL[objs[i].id],
