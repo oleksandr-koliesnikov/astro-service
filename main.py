@@ -94,20 +94,26 @@ def chart_endpoint(req: ChartRequest):
         except Exception:
             houses = []
 
-    # --- Аспекты (требует список аспектов в 0.2.3) ---
-    asps = []
-    objs = [nc.get(pid) for pid in PLANETS]
-    for i in range(len(objs)):
-        for j in range(i + 1, len(objs)):
-            asp = aspects.getAspect(objs[i], objs[j], aspects.MAJOR_ASPECTS)
-            if asp:
-                asps.append({
-                    "a": LABEL[objs[i].id],
-                    "b": LABEL[objs[j].id],
-                    "type": asp.type,
-                    "orb": round(asp.orb, 2),
-                    "applying": asp.applying
-                })
+  # --- Аспекты ---
+asps = []
+objs = [nc.get(pid) for pid in PLANETS]
+for i in range(len(objs)):
+    for j in range(i + 1, len(objs)):
+        asp = aspects.getAspect(objs[i], objs[j], [
+            aspects.CONJUNCTION,
+            aspects.SEXTILE,
+            aspects.SQUARE,
+            aspects.TRINE,
+            aspects.OPPOSITION
+        ])
+        if asp:
+            asps.append({
+                "a": LABEL[objs[i].id],
+                "b": LABEL[objs[j].id],
+                "type": asp.type,
+                "orb": round(asp.orb, 2),
+                "applying": asp.applying
+            })
 
     return {
         "positions": positions,
