@@ -104,7 +104,8 @@ def chart_endpoint(req: ChartRequest):
     nc = chart.Chart(dt, pos, IDs=PLANETS)
 
     # 3) Юлианская дата для вычисления скоростей в Swiss Ephemeris
-    y, m, d = map(int, dt.date.split('/'))
+    # исправленное
+    y, m, d = dt.date.year, dt.date.month, dt.date.day
     hh, mm = map(int, dt.time.split(':'))
     ut = hh + mm / 60.0
     jd = swe.julday(y, m, d, ut, swe.GREG_CAL)
