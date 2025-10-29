@@ -1,3 +1,4 @@
+# main.py
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from dateutil import parser, tz
@@ -5,11 +6,11 @@ from flatlib import const, chart
 from flatlib.geopos import GeoPos
 from flatlib.datetime import Datetime
 import os
+import math
 import swisseph as swe
 
 app = FastAPI(title="HoroscopeHub Astro Service")
 
-# --- Константы ---
 PLANETS = [
     const.SUN, const.MOON, const.MERCURY, const.VENUS, const.MARS,
     const.JUPITER, const.SATURN, const.URANUS, const.NEPTUNE, const.PLUTO,
@@ -22,33 +23,21 @@ LABEL = {
 SIGNS = ["Aries","Taurus","Gemini","Cancer","Leo","Virgo","Libra",
          "Scorpio","Sagittarius","Capricorn","Aquarius","Pisces"]
 
-# Мажорные аспекты (ручной расчёт для совместимости с flatlib 0.2.3)
-MAJOR_ASPECTS = [
-    ("conjunction", 0,   8.0),
-    ("sextile",     60,  4.0),
-    ("square",      90,  6.0),
-    ("trine",       120, 6.0),
-    ("opposition",  180, 8.0),
-]
-
+# где лежат efems *.se1
 EPHE_PATH = os.path.join(os.path.dirname(__file__), "ephe")
 swe.set_ephe_path(EPHE_PATH)
 
-# --- Модели ---
+# --------- входные данные ---------
 class ChartRequest(BaseModel):
     name: str = "Client"
     date: str = Field(..., description="YYYY-MM-DD")
     time: str = Field(..., description="HH:MM")
-    timezone: str = Field(..., description="IANA zone (e.g. Europe/Kyiv) or 'UTC±HH:MM'")
+    timezone: str = Field(..., description="IANA zone (Europe/Kyiv) или 'UTC±HH:MM'")
     lat: float
     lng: float
-    # флаги управления расчётами
-    houses: bool = True
-    angles: bool = True
-    aspects: bool = True
-    house_system: str = "P"  # на будущее (Placidus/Equal и т.п.)
+    house_system: str = Field(default="P", description="Система домов: P=Placidus, K=Koch, W=Whole, R=Regiomontanus и т.д.")
 
-# --- Утилиты ---
+# --------- утилиты времени/углов ---------
 def to_dt(date_str: str, time_str: str, timezone: str) -> Datetime:
     dt_local = parser.parse(f"{date_str} {time_str}")
     tzinfo = tz.gettz(timezone)
@@ -56,6 +45,14 @@ def to_dt(date_str: str, time_str: str, timezone: str) -> Datetime:
         raise HTTPException(status_code=400, detail="Invalid timezone")
     dt_utc = dt_local.replace(tzinfo=tzinfo).astimezone(tz.UTC)
     return Datetime(dt_utc.strftime("%Y/%m/%d"), dt_utc.strftime("%H:%M"), "+00:00")
+
+def to_dt_utc_py(date_str: str, time_str: str, timezone: str):
+    """Python datetime (UTC) для Swiss Ephemeris"""
+    dt_local = parser.parse(f"{date_str} {time_str}")
+    tzinfo = tz.gettz(timezone)
+    if tzinfo is None:
+        raise HTTPException(status_code=400, detail="Invalid timezone")
+    return dt_local.replace(tzinfo=tzinfo).astimezone(tz.UTC)
 
 def deg_to_dm_cardinal(value: float, is_lat: bool) -> str:
     hemi_pos = 'n' if is_lat else 'e'
@@ -76,73 +73,114 @@ def ang_diff(a, b):
     # минимальная разница углов 0..180
     return abs((a - b + 180) % 360 - 180)
 
-# --- API ---
+# мажорные аспекты
+MAJOR_ASPECTS = [
+    ("conjunction", 0,   8.0),
+    ("sextile",     60,  4.0),
+    ("square",      90,  6.0),
+    ("trine",       120, 6.0),
+    ("opposition",  180, 8.0),
+]
+
+# --------- расчёт домов через Swiss Ephemeris ---------
+def houses_by_swe(date_str: str, time_str: str, timezone: str, lat: float, lng: float, hs: str):
+    """Возвращает (cusps[12], angles: dict с ASC/MC)"""
+    dt_utc = to_dt_utc_py(date_str, time_str, timezone)
+    # дробные часы UTC
+    h = dt_utc.hour + dt_utc.minute/60 + dt_utc.second/3600
+    jd_ut = swe.julday(dt_utc.year, dt_utc.month, dt_utc.day, h, swe.GREG_CAL)
+
+    # Swiss: bytes code системы домов
+    hsys = (hs or "P").strip()[:1].upper().encode("ascii")
+    cusps, ascmc = swe.houses(jd_ut, lat, lng, hsys)  # cusps: 1..12
+    # ascmc: [ASC, MC, ARMC, Vertex, Equasc, Co-Asc W.Koch, Co-Asc Munkasey, Polar Asc]
+    asc = float(ascmc[0]); mc = float(ascmc[1])
+
+    # нормализуем 12 куспов в список 0..11
+    houses = [round(float(cusps[i+1]) % 360, 6) for i in range(12)]
+    angles = {
+        "ASC": {"lon": round(asc % 360, 6), "sign": sign_from_lon(asc)},
+        "MC":  {"lon": round(mc % 360,  6), "sign": sign_from_lon(mc)},
+    }
+    return houses, angles
+
+def house_of(lon: float, cusps: list[float]) -> int | None:
+    """Определяем номер дома 1..12 по долготе и массиву куспов (Placidus/и пр.)"""
+    if not cusps or len(cusps) != 12:
+        return None
+    lon = lon % 360
+    for i in range(12):
+        c1 = cusps[i]
+        c2 = cusps[(i + 1) % 12]
+        if c1 <= c2:
+            inside = (lon >= c1 and lon < c2)
+        else:
+            # переход через 360
+            inside = (lon >= c1 or lon < c2)
+        if inside:
+            return i + 1
+    return 12
+
+# --------- эндпоинты ---------
 @app.post("/chart")
 def chart_endpoint(req: ChartRequest):
-    # Время/место
+    # flatlib для планет
     dt = to_dt(req.date, req.time, req.timezone)
     lat_str = deg_to_dm_cardinal(req.lat, is_lat=True)
     lon_str = deg_to_dm_cardinal(req.lng, is_lat=False)
     pos = GeoPos(lat_str, lon_str)
-
-    # Карта
     nc = chart.Chart(dt, pos, IDs=PLANETS)
 
-    # Позиции планет (всегда)
+    # позиции планет
     positions = {}
     for pid in PLANETS:
         obj = nc.get(pid)
         positions[LABEL[pid]] = {
             "lon": float(obj.lon),
-            "sign": sign_from_lon(obj.lon),
             "lat": float(obj.lat),
+            "sign": sign_from_lon(obj.lon),
+            "house": None,  # заполним после расчёта домов
         }
 
-    # Углы (по флагу)
-    angles = {}
-    if req.angles:
+    # дома + углы через Swiss Ephemeris
+    try:
+        houses, angles = houses_by_swe(req.date, req.time, req.timezone, req.lat, req.lng, req.house_system)
+    except Exception as e:
+        # если что-то пошло не так, отдаём только ASC/MC из flatlib
         angles = {
             "ASC": {"lon": round(nc.get(const.ASC).lon, 6), "sign": sign_from_lon(nc.get(const.ASC).lon)},
             "MC":  {"lon": round(nc.get(const.MC).lon,  6), "sign": sign_from_lon(nc.get(const.MC).lon)},
         }
+        houses = []
 
-    # Дома (по флагу) — совместимо с flatlib 0.2.3
-    houses = []
-    if req.houses:
-        try:
-            for h in getattr(nc.houses, "houses", []):
-                lon = getattr(h, "lon", None)
-                if lon is not None:
-                    houses.append(round(lon, 6))
-                elif hasattr(h, "cusp") and hasattr(h.cusp, "lon"):
-                    houses.append(round(h.cusp.lon, 6))
-        except Exception:
-            houses = []
+    # подставим дом для каждой планеты (если есть куспы)
+    if houses:
+        for name, p in positions.items():
+            p["house"] = house_of(p["lon"], houses)
 
-    # Аспекты (по флагу) — мажорные, ручной расчёт
+    # аспекты (мажорные)
     asps = []
-    if req.aspects:
-        objs = [nc.get(pid) for pid in PLANETS]
-        for i in range(len(objs)):
-            for j in range(i + 1, len(objs)):
-                d = ang_diff(objs[i].lon, objs[j].lon)
-                for name, target, orb in MAJOR_ASPECTS:
-                    delta = abs(d - target)
-                    if delta <= orb:
-                        asps.append({
-                            "a": LABEL[objs[i].id],
-                            "b": LABEL[objs[j].id],
-                            "type": name,
-                            "orb": round(delta, 2),
-                            "applying": None,  # без скоростей не считаем
-                        })
-                        break
+    objs = [nc.get(pid) for pid in PLANETS]
+    for i in range(len(objs)):
+        for j in range(i + 1, len(objs)):
+            d = ang_diff(objs[i].lon, objs[j].lon)
+            for name, target, orb in MAJOR_ASPECTS:
+                delta = abs(d - target)
+                if delta <= orb:
+                    asps.append({
+                        "a": LABEL[objs[i].id],
+                        "b": LABEL[objs[j].id],
+                        "type": name,
+                        "orb": round(delta, 2),
+                        "applying": None,  # без скоростей не считаем
+                    })
+                    break
 
     return {
-        "positions": positions,
-        "angles": angles,
-        "houses": houses,
-        "aspects": asps,
+        "positions": positions,   # у каждой планеты: lon, lat, sign, house
+        "angles": angles,         # ASC/MC
+        "houses": houses,         # список из 12 куспов (в градусах)
+        "aspects": asps
     }
 
 @app.get("/")
