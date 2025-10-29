@@ -125,16 +125,43 @@ def chart_endpoint(req: ChartRequest):
             "lat": float(obj.lat),
         }
 
-    # Дома и углы (Swiss Ephemeris) — надёжно и совместимо
-    try:
-        houses, angles = houses_by_swe(dt_utc, req.lat, req.lng, (req.house_system or "P"))
-    except Exception as e:
-        # Если что-то не так с эфемеридами — не валим весь запрос
-        houses = []
-        angles = {
-            "ASC": {"lon": round(nc.get(const.ASC).lon, 6), "sign": sign_from_lon(nc.get(const.ASC).lon)},
-            "MC":  {"lon": round(nc.get(const.MC).lon,  6), "sign": sign_from_lon(nc.get(const.MC).lon)},
-        }
+    # --- ДОМА (Flatlib 0.2.3 совместимо) ---
+houses = []
+try:
+    house_data = getattr(nc, "houses", None)
+    if hasattr(house_data, "houses"):
+        # flatlib 0.2.3 формат
+        for h in house_data.houses:
+            lon = getattr(h, "lon", None)
+            if lon is not None:
+                houses.append({
+                    "num": len(houses) + 1,
+                    "lon": round(lon, 6),
+                    "sign": sign_from_lon(lon)
+                })
+            elif hasattr(h, "cusp") and hasattr(h.cusp, "lon"):
+                houses.append({
+                    "num": len(houses) + 1,
+                    "lon": round(h.cusp.lon, 6),
+                    "sign": sign_from_lon(h.cusp.lon)
+                })
+    else:
+        # fallback — если структура другая
+        for i in range(1, 13):
+            cusp = nc.getHouse(i)
+            houses.append({
+                "num": i,
+                "lon": round(cusp.lon, 6),
+                "sign": sign_from_lon(cusp.lon)
+            })
+except Exception as e:
+    houses = [{"error": str(e)}]
+
+# --- УГЛЫ ---
+angles = {
+    "ASC": {"lon": round(nc.get(const.ASC).lon, 6), "sign": sign_from_lon(nc.get(const.ASC).lon)},
+    "MC":  {"lon": round(nc.get(const.MC).lon, 6), "sign": sign_from_lon(nc.get(const.MC).lon)}
+}
 
     # Мажорные аспекты (без скоростей; applying=None)
     asps = []
