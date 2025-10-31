@@ -194,3 +194,59 @@ def health():
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+from fastapi import Response
+import math
+
+def svg_aspects(positions: dict, aspects: list, size=420):
+    cx = cy = size // 2
+    r = size * 0.45
+
+    # координаты планет по долготе
+    def pol(lon_deg):
+        ang = math.radians(90 - lon_deg)  # 0° = Овен на востоке; сдвиг под SVG
+        return (cx + r * math.cos(ang), cy - r * math.sin(ang))
+
+    # карта имён → долгота
+    lons = {name: p["lon"] for name, p in positions.items()}
+
+    parts = []
+    parts.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">')
+    parts.append(f'<rect width="100%" height="100%" fill="none"/>')
+
+    # внешний круг
+    parts.append(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="#8a7a53" stroke-width="1.2"/>')
+
+    # деления знаков
+    for k in range(12):
+        ang = math.radians(90 - k*30)
+        x1 = cx + r * math.cos(ang)
+        y1 = cy - r * math.sin(ang)
+        x2 = cx + (r-8) * math.cos(ang)
+        y2 = cy - (r-8) * math.sin(ang)
+        parts.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#8a7a53" stroke-width="1"/>')
+
+    # аспекты (цвет по типу)
+    colors = {"conjunction":"#d9b87a","sextile":"#6aa6ff","square":"#ff6b6b","trine":"#66d17e","opposition":"#ffa94d"}
+    for asp in aspects:
+        a, b = asp["a"], asp["b"]
+        if a not in lons or b not in lons: 
+            continue
+        x1, y1 = pol(lons[a])
+        x2, y2 = pol(lons[b])
+        col = colors.get(asp["type"], "#ccc")
+        parts.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{col}" stroke-opacity="0.85" stroke-width="1.6"/>')
+
+    # точки планет
+    for name, lon in lons.items():
+        x, y = pol(lon)
+        parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" fill="#d9b87a"/>')
+
+    parts.append('</svg>')
+    return ''.join(parts)
+
+@app.post("/render/aspects")
+def render_aspects(req: ChartRequest):
+    data = chart_endpoint(req)  # переиспользуем расчёт
+    svg = svg_aspects(data["positions"], data["aspects"])
+    return Response(content=svg, media_type="image/svg+xml")
